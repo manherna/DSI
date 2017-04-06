@@ -1,4 +1,4 @@
-
+﻿
 #ifndef UNICODE
 #define UNICODE
 #endif 
@@ -27,6 +27,8 @@ class MainWindow : public BaseWindow<MainWindow>
 	ID2D1Factory            *pFactory;
 	ID2D1HwndRenderTarget   *pRenderTarget;
 	ID2D1SolidColorBrush    *pBrush;
+	ID2D1SolidColorBrush    *PBrushaux;
+
 	D2D1_ELLIPSE            ellipse;
 	D2D1_ELLIPSE			ellipse2;
 	D2D1_POINT_2F           ptMouse;
@@ -43,14 +45,14 @@ class MainWindow : public BaseWindow<MainWindow>
 	void    OnLButtonDown(int pixelX, int pixelY, DWORD flags);
 	void    OnLButtonUp();
 	void    OnMouseMove(int pixelX, int pixelY, DWORD flags);
-	BOOL	HitTest(float x, float y);
+	BOOL	HitTest(D2D1_ELLIPSE ellipse, float x, float y);
 	void	changeMode(Mode a){
 		modoAct = a;
 	}
 
 public:
 
-	MainWindow() : pFactory(NULL), pRenderTarget(NULL), pBrush(NULL),
+	MainWindow() : pFactory(NULL), pRenderTarget(NULL), pBrush(NULL),PBrushaux(NULL),
 		ellipse(D2D1::Ellipse(D2D1::Point2F(), 0, 0)),
 		ellipse2(D2D1::Ellipse(D2D1::Point2F(), 0, 0)),
 		ptMouse(D2D1::Point2F()),
@@ -165,6 +167,10 @@ HRESULT MainWindow::CreateGraphicsResources()
 		{
 			const D2D1_COLOR_F color = D2D1::ColorF(1.0f, 1.0f, 0);
 			hr = pRenderTarget->CreateSolidColorBrush(color, &pBrush);
+			const D2D1_COLOR_F c = D2D1::ColorF(1, 1, 1);
+			pRenderTarget->CreateSolidColorBrush(c, &PBrushaux);
+
+
 
 			if (SUCCEEDED(hr))
 			{
@@ -195,7 +201,7 @@ void MainWindow::OnPaint()
 		pRenderTarget->Clear(D2D1::ColorF(D2D1::ColorF::SkyBlue));
 		pRenderTarget->FillEllipse(ellipse, pBrush);
 		pRenderTarget->Clear(D2D1::ColorF(D2D1::ColorF::SkyBlue));
-		pRenderTarget->FillEllipse(ellipse2, pBrush);
+		pRenderTarget->FillEllipse(ellipse2, PBrushaux);
 		RenderScene();
 
 
@@ -266,9 +272,18 @@ void MainWindow::OnMouseMove(int pixelX, int pixelY, DWORD flags)
 		const float x1 = ptMouse.x + width;
 		const float y1 = ptMouse.y + height;
 
-		ellipse2 = D2D1::Ellipse(D2D1::Point2F(x1, y1), width, height);
+		if (modoAct == Mode::DrawMode) {
+			ellipse2 = D2D1::Ellipse(D2D1::Point2F(x1, y1), width, height);
 
-		InvalidateRect(m_hwnd, NULL, FALSE);
+			InvalidateRect(m_hwnd, NULL, FALSE);
+		}
+		else if (modoAct == Mode::DragMode)
+		{
+			ellipse2.point.x += (float)width;
+			ellipse2.point.y += (float)height;
+			ptMouse = dips;
+			InvalidateRect(m_hwnd, NULL, FALSE);
+		}
 	}
 }
 void MainWindow::OnLButtonUp()
@@ -276,10 +291,10 @@ void MainWindow::OnLButtonUp()
 	ReleaseCapture();
 }
 
-BOOL MainWindow::HitTest(float x, float y)
+BOOL MainWindow::HitTest(D2D1_ELLIPSE ellipse, float x, float y)
 {
-	const float a = ellipse2.radiusX;
-	const float b = ellipse2.radiusY;
+	const float a = ellipse.radiusX;
+	const float b = ellipse.radiusY;
 	const float x1 = x - ellipse.point.x;
 	const float y1 = y - ellipse.point.y;
 	const float d = ((x1 * x1) / (a * a)) + ((y1 * y1) / (b * b));
@@ -326,26 +341,69 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam)
 		else actual = ClockMode::Run;
 		return 0;
 
-	case WM_LBUTTONDOWN:
-	{
-		POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-		if (DragDetect(m_hwnd, pt))
-		{	
-			if (modoAct == Mode::SelectMode){
+		case WM_LBUTTONDOWN:
+		{
+			if (modoAct == Mode::SelectMode) {
+				if (HitTest(ellipse2, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam))) {
+					modoAct = Mode::DragMode;
+				}
+				else modoAct = Mode::DrawMode;
+
 				OnLButtonDown(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam), (DWORD)wParam);
+
 			}
+			else if (modoAct == Mode::DragMode) {
+				ptMouse.x = GET_X_LPARAM(lParam);
+				ptMouse.y = GET_Y_LPARAM(lParam);
+			}
+
 		}
-	}
-	return 0;
+		return 0;
 
 	case WM_LBUTTONUP:
+		modoAct = Mode::SelectMode;
 		OnLButtonUp();
 		return 0;
 
 	case WM_MOUSEMOVE:
+		if (modoAct == Mode::SelectMode) {
+			if (HitTest(ellipse2, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam))) {
+				SetCursor(LoadCursor(NULL, IDC_HAND));
+				modoAct = Mode::DragMode;
+			}
+			else SetCursor(LoadCursor(NULL, IDC_ARROW));
+		}
+		else if (modoAct == Mode::DrawMode)SetCursor(LoadCursor(NULL, IDC_CROSS));
+
 		OnMouseMove(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam), (DWORD)wParam);
 		return 0;
+
 	
+	case WM_RBUTTONDOWN:
+		CHOOSECOLOR cc; // common dialog box structure
+		static COLORREF acrCustClr[16]; // array of custom colors
+		static DWORD rgbCurrent; // initial color selection
+								 // Initialize CHOOSECOLOR
+		ZeroMemory(&cc, sizeof(cc));
+		cc.lStructSize = sizeof(cc);
+		cc.hwndOwner = m_hwnd;
+		cc.lpCustColors = (LPDWORD)acrCustClr;
+		cc.rgbResult = rgbCurrent;
+		cc.Flags = CC_FULLOPEN | CC_RGBINIT;
+		if (ChooseColor(&cc) == TRUE)
+		{
+			float rojo =  GetRValue(cc.rgbResult);
+			float verde = GetGValue(cc.rgbResult);
+			float azul = GetBValue(cc.rgbResult);
+
+			D2D1::ColorF newColor(rojo / 255, verde / 255, azul / 255, 1.0f);
+			pRenderTarget->CreateSolidColorBrush(newColor, &PBrushaux);
+			
+			//En ​cc.rgbResult​ tenemos el color seleccionado
+			//Utilizarlo para configurar nuestra brocha
+			//Es necesario transformarlo al formato de color de D2D
+		}
+		return 0;
 	}
 	return DefWindowProc(m_hwnd, uMsg, wParam, lParam);
 }
@@ -371,12 +429,13 @@ void MainWindow::RenderScene()
 {
 	pRenderTarget->Clear(D2D1::ColorF(D2D1::ColorF::SkyBlue));
 
+
 	pRenderTarget->FillEllipse(ellipse, pBrush);
 	pRenderTarget->DrawEllipse(ellipse, pBrush);
 
 
-	pRenderTarget->FillEllipse(ellipse2, pBrush);
-	pRenderTarget->DrawEllipse(ellipse2, pBrush);
+	pRenderTarget->FillEllipse(ellipse2, PBrushaux);
+	pRenderTarget->DrawEllipse(ellipse2, PBrushaux);
 
 
 	// Draw hands
